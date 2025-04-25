@@ -98,8 +98,6 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
                         config.width = new_size.width.max(1);
                         config.height = new_size.height.max(1);
                         surface.configure(&device, &config);
-                        // On macos the window needs to be redrawn manually after resizing
-                        window.request_redraw();
                     }
                     WindowEvent::RedrawRequested => {
                         let frame = surface
