@@ -1,12 +1,13 @@
-use metal::{
-    MTLArgumentBuffersTier, MTLCounterSamplingPoint, MTLFeatureSet, MTLGPUFamily,
-    MTLLanguageVersion, MTLPixelFormat, MTLReadWriteTextureTier, NSInteger,
+use objc2::runtime::ProtocolObject;
+use objc2_foundation::{NSOperatingSystemVersion, NSProcessInfo};
+use objc2_metal::{
+    MTLArgumentBuffersTier, MTLCounterSamplingPoint, MTLDevice, MTLFeatureSet, MTLGPUFamily,
+    MTLLanguageVersion, MTLPixelFormat, MTLReadWriteTextureTier,
 };
-use objc::{class, msg_send, sel, sel_impl};
 use parking_lot::Mutex;
 use wgt::{AstcBlock, AstcChannel};
 
-use alloc::sync::Arc;
+use alloc::{string::ToString as _, sync::Arc};
 
 use super::TimestampQuerySupport;
 
@@ -27,7 +28,7 @@ use super::TimestampQuerySupport;
 /// <https://bugzilla.mozilla.org/show_bug.cgi?id=1971452>.
 ///
 /// [new command buffer]: https://developer.apple.com/documentation/metal/mtlcommandqueue/makecommandbuffer()?language=objc
-const MAX_COMMAND_BUFFERS: u64 = 4096;
+const MAX_COMMAND_BUFFERS: usize = 4096;
 
 unsafe impl Send for super::Adapter {}
 unsafe impl Sync for super::Adapter {}
@@ -51,7 +52,8 @@ impl crate::Adapter for super::Adapter {
             .shared
             .device
             .lock()
-            .new_command_queue_with_max_command_buffer_count(MAX_COMMAND_BUFFERS);
+            .new_command_queue_with_max_command_buffer_count(MAX_COMMAND_BUFFERS)
+            .unwrap();
 
         // Acquiring the meaning of timestamp ticks is hard with Metal!
         // The only thing there is is a method correlating cpu & gpu timestamps (`device.sample_timestamps`).
@@ -72,7 +74,14 @@ impl crate::Adapter for super::Adapter {
         // Based on:
         // * https://github.com/gfx-rs/wgpu/pull/2528
         // * https://github.com/gpuweb/gpuweb/issues/1325#issuecomment-761041326
-        let timestamp_period = if self.shared.device.lock().name().starts_with("Intel") {
+        let timestamp_period = if self
+            .shared
+            .device
+            .lock()
+            .name()
+            .to_string()
+            .starts_with("Intel")
+        {
             83.333
         } else {
             // Known for Apple Silicon (at least M1 & M2, iPad Pro 2018) and AMD GPUs.
@@ -107,6 +116,8 @@ impl crate::Adapter for super::Adapter {
             MTLReadWriteTextureTier::TierNone => (Tfc::empty(), Tfc::empty()),
             MTLReadWriteTextureTier::Tier1 => (Tfc::STORAGE_READ_WRITE, Tfc::empty()),
             MTLReadWriteTextureTier::Tier2 => (Tfc::STORAGE_READ_WRITE, Tfc::STORAGE_READ_WRITE),
+            // Unknown levels of support are likely higher than Tier 2.
+            _ => (Tfc::STORAGE_READ_WRITE, Tfc::STORAGE_READ_WRITE),
         };
         let msaa_count = pc.sample_count_mask;
 
@@ -129,7 +140,7 @@ impl crate::Adapter for super::Adapter {
             ],
         );
 
-        let image_atomic_if = if pc.msl_version >= MTLLanguageVersion::V3_1 {
+        let image_atomic_if = if pc.msl_version >= MTLLanguageVersion::Version3_1 {
             Tfc::STORAGE_ATOMIC
         } else {
             Tfc::empty()
@@ -511,55 +522,53 @@ const DEPTH_CLIP_MODE: &[MTLFeatureSet] = &[
     MTLFeatureSet::macOS_GPUFamily1_v1,
 ];
 
-const OS_NOT_SUPPORT: (usize, usize) = (10000, 0);
+const OS_NOT_SUPPORT: (isize, isize) = (10000, 0);
 
 impl super::PrivateCapabilities {
-    fn supports_any(raw: &metal::DeviceRef, features_sets: &[MTLFeatureSet]) -> bool {
+    fn supports_any(raw: &ProtocolObject<dyn MTLDevice>, features_sets: &[MTLFeatureSet]) -> bool {
         features_sets
             .iter()
             .cloned()
             .any(|x| raw.supports_feature_set(x))
     }
 
-    pub fn new(device: &metal::Device) -> Self {
-        #[repr(C)]
-        #[derive(Clone, Copy, Debug)]
-        #[allow(clippy::upper_case_acronyms)]
-        struct NSOperatingSystemVersion {
-            major: usize,
-            minor: usize,
-            patch: usize,
-        }
-
-        impl NSOperatingSystemVersion {
+    pub fn new(device: &ProtocolObject<dyn MTLDevice>) -> Self {
+        trait AtLeast {
             fn at_least(
                 &self,
-                mac_version: (usize, usize),
-                ios_version: (usize, usize),
+                mac_version: (isize, isize),
+                ios_version: (isize, isize),
+                is_mac: bool,
+            ) -> bool;
+        }
+
+        impl AtLeast for NSOperatingSystemVersion {
+            fn at_least(
+                &self,
+                mac_version: (isize, isize),
+                ios_version: (isize, isize),
                 is_mac: bool,
             ) -> bool {
                 if is_mac {
-                    self.major > mac_version.0
-                        || (self.major == mac_version.0 && self.minor >= mac_version.1)
+                    self.majorVersion > mac_version.0
+                        || (self.majorVersion == mac_version.0
+                            && self.minorVersion >= mac_version.1)
                 } else {
-                    self.major > ios_version.0
-                        || (self.major == ios_version.0 && self.minor >= ios_version.1)
+                    self.majorVersion > ios_version.0
+                        || (self.majorVersion == ios_version.0
+                            && self.minorVersion >= ios_version.1)
                 }
             }
         }
 
-        let version: NSOperatingSystemVersion = unsafe {
-            let process_info: *mut objc::runtime::Object =
-                msg_send![class!(NSProcessInfo), processInfo];
-            msg_send![process_info, operatingSystemVersion]
-        };
+        let version = NSProcessInfo::processInfo().operatingSystemVersion();
 
         let os_is_mac = device.supports_feature_set(MTLFeatureSet::macOS_GPUFamily1_v1);
         // Metal was first introduced in OS X 10.11 and iOS 8. The current version number of visionOS is 1.0.0. Additionally,
         // on the Simulator, Apple only provides the Apple2 GPU capability, and the Apple2+ GPU capability covers the capabilities of Apple2.
         // Therefore, the following conditions can be used to determine if it is visionOS.
         // https://developer.apple.com/documentation/metal/developing_metal_apps_that_run_in_simulator
-        let os_is_xr = version.major < 8 && device.supports_family(MTLGPUFamily::Apple2);
+        let os_is_xr = version.majorVersion < 8 && device.supports_family(MTLGPUFamily::Apple2);
         let family_check = os_is_xr || version.at_least((10, 15), (13, 0), os_is_mac);
 
         let mut sample_count_mask = crate::TextureFormatCapabilities::MULTISAMPLE_X4; // 1 and 4 samples are supported on all devices
@@ -609,25 +618,25 @@ impl super::PrivateCapabilities {
         Self {
             family_check,
             msl_version: if os_is_xr || version.at_least((14, 0), (17, 0), os_is_mac) {
-                MTLLanguageVersion::V3_1
+                MTLLanguageVersion::Version3_1
             } else if version.at_least((13, 0), (16, 0), os_is_mac) {
-                MTLLanguageVersion::V3_0
+                MTLLanguageVersion::Version3_0
             } else if version.at_least((12, 0), (15, 0), os_is_mac) {
-                MTLLanguageVersion::V2_4
+                MTLLanguageVersion::Version2_4
             } else if version.at_least((11, 0), (14, 0), os_is_mac) {
-                MTLLanguageVersion::V2_3
+                MTLLanguageVersion::Version2_3
             } else if version.at_least((10, 15), (13, 0), os_is_mac) {
-                MTLLanguageVersion::V2_2
+                MTLLanguageVersion::Version2_2
             } else if version.at_least((10, 14), (12, 0), os_is_mac) {
-                MTLLanguageVersion::V2_1
+                MTLLanguageVersion::Version2_1
             } else if version.at_least((10, 13), (11, 0), os_is_mac) {
-                MTLLanguageVersion::V2_0
+                MTLLanguageVersion::Version2_0
             } else if version.at_least((10, 12), (10, 0), os_is_mac) {
-                MTLLanguageVersion::V1_2
+                MTLLanguageVersion::Version1_2
             } else if version.at_least((10, 11), (9, 0), os_is_mac) {
-                MTLLanguageVersion::V1_1
+                MTLLanguageVersion::Version1_1
             } else {
-                MTLLanguageVersion::V1_0
+                MTLLanguageVersion::Version1_0
             },
             // macOS 10.11 doesn't support read-write resources
             fragment_rw_storage: version.at_least((10, 12), (8, 0), os_is_mac),
@@ -661,8 +670,9 @@ impl super::PrivateCapabilities {
             texture_cube_array: Self::supports_any(device, TEXTURE_CUBE_ARRAY_SUPPORT),
             supports_float_filtering: os_is_mac
                 || (version.at_least((11, 0), (14, 0), os_is_mac)
-                    && device.supports_32bit_float_filtering()),
-            format_depth24_stencil8: os_is_mac && device.d24_s8_supported(),
+                    && device.supports32_bit_float_filtering()),
+            format_depth24_stencil8: os_is_mac
+                && device.is_depth24_stencil8_pixel_format_supported(),
             format_depth32_stencil8_filter: os_is_mac,
             format_depth32_stencil8_none: !os_is_mac,
             format_min_srgb_channels: if os_is_mac { 4 } else { 1 },
@@ -765,8 +775,7 @@ impl super::PrivateCapabilities {
             buffer_alignment: if os_is_mac || os_is_xr { 256 } else { 64 },
             max_buffer_size: if version.at_least((10, 14), (12, 0), os_is_mac) {
                 // maxBufferLength available on macOS 10.14+ and iOS 12.0+
-                let buffer_size: NSInteger = unsafe { msg_send![device.as_ref(), maxBufferLength] };
-                buffer_size as _
+                device.max_buffer_length() as u64
             } else if os_is_mac {
                 1 << 30 // 1GB on macOS 10.11 and up
             } else {
@@ -945,7 +954,7 @@ impl super::PrivateCapabilities {
         );
         features.set(
             F::DUAL_SOURCE_BLENDING,
-            self.msl_version >= MTLLanguageVersion::V1_2 && self.dual_source_blending,
+            self.msl_version >= MTLLanguageVersion::Version1_2 && self.dual_source_blending,
         );
         features.set(F::TEXTURE_COMPRESSION_ASTC, self.format_astc);
         features.set(F::TEXTURE_COMPRESSION_ASTC_HDR, self.format_astc_hdr);
@@ -965,29 +974,29 @@ impl super::PrivateCapabilities {
                 | F::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING
                 | F::STORAGE_TEXTURE_ARRAY_NON_UNIFORM_INDEXING
                 | F::PARTIALLY_BOUND_BINDING_ARRAY,
-            self.msl_version >= MTLLanguageVersion::V3_0
+            self.msl_version >= MTLLanguageVersion::Version3_0
                 && self.supports_arrays_of_textures
-                && self.argument_buffers as u64 >= MTLArgumentBuffersTier::Tier2 as u64,
+                && self.argument_buffers >= MTLArgumentBuffersTier::Tier2,
         );
         features.set(
             F::SHADER_INT64,
-            self.int64 && self.msl_version >= MTLLanguageVersion::V2_3,
+            self.int64 && self.msl_version >= MTLLanguageVersion::Version2_3,
         );
         features.set(
             F::SHADER_INT64_ATOMIC_MIN_MAX,
-            self.int64_atomics && self.msl_version >= MTLLanguageVersion::V2_4,
+            self.int64_atomics && self.msl_version >= MTLLanguageVersion::Version2_4,
         );
         features.set(
             F::TEXTURE_INT64_ATOMIC,
-            self.int64_atomics && self.msl_version >= MTLLanguageVersion::V3_1,
+            self.int64_atomics && self.msl_version >= MTLLanguageVersion::Version3_1,
         );
         features.set(
             F::TEXTURE_ATOMIC,
-            self.msl_version >= MTLLanguageVersion::V3_1,
+            self.msl_version >= MTLLanguageVersion::Version3_1,
         );
         features.set(
             F::SHADER_FLOAT32_ATOMIC,
-            self.float_atomics && self.msl_version >= MTLLanguageVersion::V3_0,
+            self.float_atomics && self.msl_version >= MTLLanguageVersion::Version3_0,
         );
 
         features.set(
@@ -1273,8 +1282,8 @@ impl super::PrivateCapabilities {
 }
 
 impl super::PrivateDisabilities {
-    pub fn new(device: &metal::Device) -> Self {
-        let is_intel = device.name().starts_with("Intel");
+    pub fn new(device: &ProtocolObject<dyn MTLDevice>) -> Self {
+        let is_intel = device.name().to_string().starts_with("Intel");
         Self {
             broken_viewport_near_depth: is_intel
                 && !device.supports_feature_set(MTLFeatureSet::macOS_GPUFamily1_v4),

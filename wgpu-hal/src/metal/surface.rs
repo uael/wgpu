@@ -1,22 +1,18 @@
-#![allow(clippy::let_unit_value)] // `let () =` being used to constrain result type
-
 use alloc::borrow::ToOwned as _;
 
-use core_graphics_types::{
-    base::CGFloat,
-    geometry::{CGRect, CGSize},
+use objc2::{
+    rc::{autoreleasepool, Retained},
+    runtime::ProtocolObject,
+    ClassType, Message,
 };
-use metal::MTLTextureType;
-use objc::{
-    class, msg_send,
-    rc::autoreleasepool,
-    runtime::{BOOL, YES},
-    sel, sel_impl,
-};
+use objc2_core_foundation::CGSize;
+use objc2_foundation::NSObjectProtocol;
+use objc2_metal::MTLTextureType;
+use objc2_quartz_core::{CAMetalDrawable, CAMetalLayer};
 use parking_lot::{Mutex, RwLock};
 
 impl super::Surface {
-    pub fn new(layer: metal::MetalLayer) -> Self {
+    pub fn new(layer: Retained<CAMetalLayer>) -> Self {
         Self {
             render_layer: Mutex::new(layer),
             swapchain_format: RwLock::new(None),
@@ -25,11 +21,9 @@ impl super::Surface {
         }
     }
 
-    pub fn from_layer(layer: &metal::MetalLayerRef) -> Self {
-        let class = class!(CAMetalLayer);
-        let proper_kind: BOOL = unsafe { msg_send![layer, isKindOfClass: class] };
-        assert_eq!(proper_kind, YES);
-        Self::new(layer.to_owned())
+    pub fn from_layer(layer: &CAMetalLayer) -> Self {
+        assert!(layer.isKindOfClass(CAMetalLayer::class()));
+        Self::new(layer.retain())
     }
 
     /// Gets the current dimensions of the `Surface`.
@@ -40,11 +34,10 @@ impl super::Surface {
     /// of sync. This is sound, as these properties are accessed atomically.
     /// See: <https://github.com/gfx-rs/wgpu/pull/7692>
     pub(super) fn dimensions(&self) -> wgt::Extent3d {
-        let (size, scale): (CGSize, CGFloat) = unsafe {
-            let render_layer_borrow = self.render_layer.lock();
-            let render_layer = render_layer_borrow.as_ref();
-            let bounds: CGRect = msg_send![render_layer, bounds];
-            let contents_scale: CGFloat = msg_send![render_layer, contentsScale];
+        let (size, scale) = {
+            let render_layer = self.render_layer.lock();
+            let bounds = render_layer.bounds();
+            let contents_scale = render_layer.contents_scale();
             (bounds.size, contents_scale)
         };
 
@@ -86,7 +79,7 @@ impl crate::Surface for super::Surface {
         }
 
         let device_raw = device.shared.device.lock();
-        render_layer.set_device(&device_raw);
+        render_layer.set_device(Some(&device_raw));
         render_layer.set_pixel_format(caps.map_format(config.format));
         render_layer.set_framebuffer_only(framebuffer_only);
         render_layer.set_presents_with_transaction(self.present_with_transaction);
@@ -98,13 +91,13 @@ impl crate::Surface for super::Surface {
         }
 
         // this gets ignored on iOS for certain OS/device combinations (iphone5s iOS 10.3)
-        render_layer.set_maximum_drawable_count(config.maximum_frame_latency as u64 + 1);
+        render_layer.set_maximum_drawable_count(config.maximum_frame_latency as usize + 1);
         render_layer.set_drawable_size(drawable_size);
         if caps.can_set_next_drawable_timeout {
-            let () = msg_send![*render_layer, setAllowsNextDrawableTimeout:false];
+            render_layer.set_allows_next_drawable_timeout(false);
         }
         if caps.can_set_display_sync {
-            let () = msg_send![*render_layer, setDisplaySyncEnabled: display_sync];
+            render_layer.set_display_sync_enabled(display_sync);
         }
 
         Ok(())
@@ -120,7 +113,7 @@ impl crate::Surface for super::Surface {
         _fence: &super::Fence,
     ) -> Result<Option<crate::AcquiredSurfaceTexture<super::Api>>, crate::SurfaceError> {
         let render_layer = self.render_layer.lock();
-        let (drawable, texture) = match autoreleasepool(|| {
+        let (drawable, texture) = match autoreleasepool(|_| {
             render_layer
                 .next_drawable()
                 .map(|drawable| (drawable.to_owned(), drawable.texture().to_owned()))
@@ -135,7 +128,7 @@ impl crate::Surface for super::Surface {
             texture: super::Texture {
                 raw: texture,
                 format: swapchain_format,
-                raw_type: MTLTextureType::D2,
+                raw_type: MTLTextureType::Type2D,
                 array_layers: 1,
                 mip_levels: 1,
                 copy_size: crate::CopyExtent {
@@ -144,7 +137,7 @@ impl crate::Surface for super::Surface {
                     depth: 1,
                 },
             },
-            drawable,
+            drawable: ProtocolObject::from_retained(drawable),
             present_with_transaction: self.present_with_transaction,
         };
 
