@@ -196,13 +196,8 @@ impl crate::CommandEncoder for super::CommandEncoder {
 
     unsafe fn begin_encoding(&mut self, label: crate::Label) -> Result<(), crate::DeviceError> {
         let queue = &self.raw_queue.lock();
-        let retain_references = self.shared.settings.retain_command_buffer_references;
         let raw = objc::rc::autoreleasepool(move || {
-            let cmd_buf_ref = if retain_references {
-                queue.new_command_buffer()
-            } else {
-                queue.new_command_buffer_with_unretained_references()
-            };
+            let cmd_buf_ref = queue.new_command_buffer_with_unretained_references();
             if let Some(label) = label {
                 cmd_buf_ref.set_label(label);
             }

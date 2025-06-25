@@ -311,24 +311,10 @@ struct PrivateDisabilities {
     broken_layered_clear_image: bool,
 }
 
-#[derive(Debug)]
-struct Settings {
-    retain_command_buffer_references: bool,
-}
-
-impl Default for Settings {
-    fn default() -> Self {
-        Self {
-            retain_command_buffer_references: true,
-        }
-    }
-}
-
 struct AdapterShared {
     device: Mutex<metal::Device>,
     disabilities: PrivateDisabilities,
     private_caps: PrivateCapabilities,
-    settings: Settings,
     presentation_timer: time::PresentationTimer,
 }
 
@@ -344,7 +330,6 @@ impl AdapterShared {
             disabilities: PrivateDisabilities::new(&device),
             private_caps,
             device: Mutex::new(device),
-            settings: Settings::default(),
             presentation_timer: time::PresentationTimer::new(),
         }
     }
