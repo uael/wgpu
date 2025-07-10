@@ -134,7 +134,7 @@ impl Instance {
                     .push((A::VARIANT, Box::new(instance)));
             }
             Err(err) => {
-                log::debug!(
+                log::error!(
                     "Instance::new: failed to create {:?} backend: {:?}",
                     A::VARIANT,
                     err
