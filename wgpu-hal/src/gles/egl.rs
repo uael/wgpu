@@ -684,6 +684,14 @@ impl Inner {
                     egl.create_context(display, config, None, &gles_context_attributes)
                 };
 
+                if let Err(e) = result {
+                    log::error!("Error creating context: {:?}", e);
+                    log::error!("Config: {:?}", config);
+                    log::error!("GL context attributes: {:?}", gl_context_attributes);
+                    log::error!("GLES context attributes: {:?}", gles_context_attributes);
+                    log::error!("Supports OpenGL: {:?}", supports_opengl);
+                }
+
                 match (result, robustness) {
                     // We have a context at the requested robustness level
                     (Ok(_), robustness) => {
