@@ -868,8 +868,6 @@ impl crate::Instance for Instance {
         let egl = match egl_result {
             Ok(egl) => Arc::new(egl),
             Err(e) => {
-                let test_1_3 = unsafe { khronos_egl::DynamicInstance::<khronos_egl::EGL1_3>::load_required() }.map(|_| ());
-                log::error!("1.3: {:?}", test_1_3);
                 return Err(crate::InstanceError::with_source(
                     String::from("unable to open libEGL"),
                     e,
@@ -881,10 +879,7 @@ impl crate::Instance for Instance {
 
         let client_ext_str = match client_extensions {
             Ok(ext) => ext.to_string_lossy().into_owned(),
-            Err(err) => {
-                log::error!("Failed to query EGL client extensions: {err}");
-                String::new()
-            },
+            Err(_) => String::new(),
         };
         log::debug!(
             "Client extensions: {:#?}",
