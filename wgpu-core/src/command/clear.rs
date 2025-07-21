@@ -9,6 +9,7 @@ use crate::{
     device::DeviceError,
     get_lowest_common_denom,
     global::Global,
+    hal_label,
     id::{BufferId, CommandEncoderId, TextureId},
     init_tracker::{MemoryInitKind, TextureInitRange},
     resource::{
@@ -253,6 +254,7 @@ impl Global {
             &device.alignments,
             device.zero_buffer.as_ref(),
             &snatch_guard,
+            device.instance_flags,
         )?;
 
         cmd_buf_data_guard.mark_successful();
@@ -268,6 +270,7 @@ pub(crate) fn clear_texture<T: TextureTrackerSetSingle>(
     alignments: &hal::Alignments,
     zero_buffer: &dyn hal::DynBuffer,
     snatch_guard: &SnatchGuard<'_>,
+    instance_flags: wgt::InstanceFlags,
 ) -> Result<(), ClearError> {
     let dst_raw = dst_texture.try_raw(snatch_guard)?;
 
@@ -324,10 +327,10 @@ pub(crate) fn clear_texture<T: TextureTrackerSetSingle>(
             dst_raw,
         ),
         TextureClearMode::Surface { .. } => {
-            clear_texture_via_render_passes(dst_texture, range, true, encoder)
+            clear_texture_via_render_passes(dst_texture, range, true, encoder, instance_flags)
         }
         TextureClearMode::RenderPass { is_color, .. } => {
-            clear_texture_via_render_passes(dst_texture, range, is_color, encoder)
+            clear_texture_via_render_passes(dst_texture, range, is_color, encoder, instance_flags)
         }
         TextureClearMode::None => {
             return Err(ClearError::NoValidTextureClearMode(
@@ -437,6 +440,7 @@ fn clear_texture_via_render_passes(
     range: TextureInitRange,
     is_color: bool,
     encoder: &mut dyn hal::DynCommandEncoder,
+    instance_flags: wgt::InstanceFlags,
 ) {
     assert_eq!(dst_texture.desc.dimension, wgt::TextureDimension::D2);
 
@@ -487,7 +491,10 @@ fn clear_texture_via_render_passes(
             };
             unsafe {
                 encoder.begin_render_pass(&hal::RenderPassDescriptor {
-                    label: Some("(wgpu internal) clear_texture clear pass"),
+                    label: hal_label(
+                        Some("(wgpu internal) clear_texture clear pass"),
+                        instance_flags,
+                    ),
                     extent,
                     sample_count: dst_texture.desc.sample_count,
                     color_attachments,

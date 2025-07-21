@@ -1312,6 +1312,7 @@ impl<'d> RenderPassInfo<'d> {
         mut self,
         raw: &mut dyn hal::DynCommandEncoder,
         snatch_guard: &SnatchGuard,
+        instance_flags: wgt::InstanceFlags,
     ) -> Result<(UsageScope<'d>, SurfacesInDiscardState), RenderPassErrorInner> {
         profiling::scope!("RenderPassInfo::finish");
         unsafe {
@@ -1354,7 +1355,10 @@ impl<'d> RenderPassInfo<'d> {
                 )
             };
             let desc = hal::RenderPassDescriptor::<'_, _, dyn hal::DynTextureView> {
-                label: Some("(wgpu internal) Zero init discarded depth/stencil aspect"),
+                label: hal_label(
+                    Some("(wgpu internal) Zero init discarded depth/stencil aspect"),
+                    instance_flags,
+                ),
                 extent: view.render_extent.unwrap(),
                 sample_count: view.samples,
                 color_attachments: &[],
@@ -1969,7 +1973,7 @@ impl Global {
 
             let (trackers, pending_discard_init_fixups) = state
                 .info
-                .finish(state.raw_encoder, state.snatch_guard)
+                .finish(state.raw_encoder, state.snatch_guard, self.instance.flags)
                 .map_pass_err(pass_scope)?;
 
             encoder.close().map_pass_err(pass_scope)?;
@@ -1981,7 +1985,10 @@ impl Global {
 
         {
             let transit = encoder
-                .open_pass(Some("(wgpu internal) Pre Pass"))
+                .open_pass(hal_label(
+                    Some("(wgpu internal) Pre Pass"),
+                    self.instance.flags,
+                ))
                 .map_pass_err(pass_scope)?;
 
             fixup_discarded_surfaces(

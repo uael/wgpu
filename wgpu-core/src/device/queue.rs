@@ -25,6 +25,7 @@ use crate::{
     device::{DeviceError, WaitIdleError},
     get_lowest_common_denom,
     global::Global,
+    hal_label,
     id::{self, QueueId},
     init_tracker::{has_copy_partial_init_tracker_coverage, TextureInitRange},
     lock::{rank, Mutex, MutexGuard, RwLockWriteGuard},
@@ -51,6 +52,7 @@ impl Queue {
     pub(crate) fn new(
         device: Arc<Device>,
         raw: Box<dyn hal::DynQueue>,
+        instance_flags: wgt::InstanceFlags,
     ) -> Result<Self, DeviceError> {
         let pending_encoder = device
             .command_allocator
@@ -64,7 +66,7 @@ impl Queue {
             }
         };
 
-        let mut pending_writes = PendingWrites::new(pending_encoder);
+        let mut pending_writes = PendingWrites::new(pending_encoder, instance_flags);
 
         let zero_buffer = device.zero_buffer.as_ref();
         pending_writes.activate();
@@ -312,16 +314,21 @@ pub(crate) struct PendingWrites {
     temp_resources: Vec<TempResource>,
     dst_buffers: FastHashMap<TrackerIndex, Arc<Buffer>>,
     dst_textures: FastHashMap<TrackerIndex, Arc<Texture>>,
+    instance_flags: wgt::InstanceFlags,
 }
 
 impl PendingWrites {
-    pub fn new(command_encoder: Box<dyn hal::DynCommandEncoder>) -> Self {
+    pub fn new(
+        command_encoder: Box<dyn hal::DynCommandEncoder>,
+        instance_flags: wgt::InstanceFlags,
+    ) -> Self {
         Self {
             command_encoder,
             is_recording: false,
             temp_resources: Vec::new(),
             dst_buffers: FastHashMap::default(),
             dst_textures: FastHashMap::default(),
+            instance_flags,
         }
     }
 
@@ -398,7 +405,10 @@ impl PendingWrites {
         if !self.is_recording {
             unsafe {
                 self.command_encoder
-                    .begin_encoding(Some("(wgpu internal) PendingWrites"))
+                    .begin_encoding(hal_label(
+                        Some("(wgpu internal) PendingWrites"),
+                        self.instance_flags,
+                    ))
                     .unwrap();
             }
             self.is_recording = true;
@@ -744,6 +754,7 @@ impl Queue {
                         &self.device.alignments,
                         self.device.zero_buffer.as_ref(),
                         &snatch_guard,
+                        self.device.instance_flags,
                     )
                     .map_err(QueueWriteError::from)?;
                 }
@@ -996,6 +1007,7 @@ impl Queue {
                         &self.device.alignments,
                         self.device.zero_buffer.as_ref(),
                         &self.device.snatchable_lock.read(),
+                        self.device.instance_flags,
                     )
                     .map_err(QueueWriteError::from)?;
                 }
@@ -1144,7 +1156,10 @@ impl Queue {
                         };
 
                         // execute resource transitions
-                        if let Err(e) = baked.encoder.open_pass(Some("(wgpu internal) Transit")) {
+                        if let Err(e) = baked.encoder.open_pass(hal_label(
+                            Some("(wgpu internal) Transit"),
+                            self.device.instance_flags,
+                        )) {
                             break 'error Err(e.into());
                         }
 
@@ -1179,8 +1194,10 @@ impl Queue {
                         // Note: we could technically do it after all of the command buffers,
                         // but here we have a command encoder by hand, so it's easier to use it.
                         if !used_surface_textures.is_empty() {
-                            if let Err(e) = baked.encoder.open_pass(Some("(wgpu internal) Present"))
-                            {
+                            if let Err(e) = baked.encoder.open_pass(hal_label(
+                                Some("(wgpu internal) Present"),
+                                self.device.instance_flags,
+                            )) {
                                 break 'error Err(e.into());
                             }
                             let texture_barriers = trackers
