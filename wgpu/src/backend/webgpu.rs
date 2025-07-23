@@ -2376,6 +2376,9 @@ impl dispatch::DeviceInterface for WebDevice {
             );
         });
         let _ = self.inner.lost().then(&closure);
+        // Release memory management of this closure from Rust to the JS GC.
+        // TODO: This will leak if weak references is not supported.
+        closure.forget();
     }
 
     fn on_uncaptured_error(&self, handler: Box<dyn crate::UncapturedErrorHandler>) {
@@ -2385,7 +2388,8 @@ impl dispatch::DeviceInterface for WebDevice {
         }) as Box<dyn FnMut(_)>);
         self.inner
             .set_onuncapturederror(Some(f.as_ref().unchecked_ref()));
-        // TODO: This will leak the memory associated with the error handler by default.
+        // Release memory management of this closure from Rust to the JS GC.
+        // TODO: This will leak if weak references is not supported.
         f.forget();
     }
 
