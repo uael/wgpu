@@ -47,6 +47,12 @@ impl Default for super::CommandState {
 }
 
 impl super::CommandEncoder {
+    pub fn raw_command_buffer(&self) -> Option<&ProtocolObject<dyn MTLCommandBuffer>> {
+        self.raw_cmd_buf.as_deref()
+    }
+}
+
+impl super::CommandEncoder {
     fn enter_blit(&mut self) -> Retained<ProtocolObject<dyn MTLBlitCommandEncoder>> {
         if self.state.blit.is_none() {
             debug_assert!(self.state.render.is_none() && self.state.compute.is_none());
