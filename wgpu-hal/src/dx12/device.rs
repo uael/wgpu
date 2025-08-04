@@ -2288,7 +2288,7 @@ impl crate::Device for super::Device {
             allocations,
             blocks,
             total_allocated_bytes: upstream.total_allocated_bytes,
-            total_reserved_bytes: upstream.total_reserved_bytes,
+            total_reserved_bytes: upstream.total_capacity_bytes,
         })
     }
 
