@@ -1157,7 +1157,7 @@ impl crate::Surface for super::Surface {
             texture: super::Texture {
                 raw: swapchain.images[index as usize],
                 drop_guard: None,
-                block: None,
+                allocation: None,
                 external_memory: None,
                 format: swapchain.config.format,
                 copy_size: crate::CopyExtent {

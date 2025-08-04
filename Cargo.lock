@@ -1814,33 +1814,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "gpu-alloc"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fbcd2dba93594b227a1f57ee09b8b9da8892c34d55aa332e034a228d0fe6a171"
-dependencies = [
- "bitflags 2.9.1",
- "gpu-alloc-types",
-]
-
-[[package]]
-name = "gpu-alloc-types"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "98ff03b468aa837d70984d55f5d3f846f6ec31fe34bbb97c4f85219caeee1ca4"
-dependencies = [
- "bitflags 2.9.1",
-]
-
-[[package]]
 name = "gpu-allocator"
 version = "0.27.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c151a2a5ef800297b4e79efa4f4bec035c5f51d5ae587287c9b952bdf734cacd"
+source = "git+https://github.com/Traverse-Research/gpu-allocator.git?rev=673e4ecb503af4188e0ca576acd0dad681f22413#673e4ecb503af4188e0ca576acd0dad681f22413"
 dependencies = [
+ "ash",
+ "hashbrown",
  "log",
  "presser",
- "thiserror 1.0.69",
+ "thiserror 2.0.12",
  "windows 0.58.0",
 ]
 
@@ -5011,7 +4993,6 @@ dependencies = [
  "glutin",
  "glutin-winit",
  "glutin_wgl_sys 0.6.1",
- "gpu-alloc",
  "gpu-allocator",
  "gpu-descriptor",
  "hashbrown",
