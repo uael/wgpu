@@ -521,7 +521,11 @@ impl Device {
                 user_closures.submissions,
                 user_closures.mappings,
                 queue_empty,
-            ) = queue_result
+            ) = queue_result;
+            // Queue::drop is acquiring the snatch lock as well 
+            drop(snatch_guard);
+        } else {
+            drop(snatch_guard);
         };
 
         // Based on the queue empty status, and the current finished submission index, determine the result of the poll.
@@ -578,7 +582,6 @@ impl Device {
 
         // Don't hold the locks while calling release_gpu_resources.
         drop(fence);
-        drop(snatch_guard);
 
         if should_release_gpu_resource {
             self.release_gpu_resources();
