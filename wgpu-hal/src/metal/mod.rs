@@ -546,7 +546,7 @@ impl crate::Queue for Queue {
             let extra_command_buffer = {
                 let completed_value = Arc::clone(&signal_fence.completed_value);
                 let block = block2::RcBlock::new(move |_cmd_buf| {
-                    completed_value.store(signal_value, atomic::Ordering::Release);
+                    let _ = completed_value.fetch_max(signal_value, atomic::Ordering::Release);
                 });
 
                 let raw = match command_buffers.last() {
@@ -563,12 +563,7 @@ impl crate::Queue for Queue {
                 raw.setLabel(Some(ns_string!("(wgpu internal) Signal")));
                 unsafe { raw.addCompletedHandler(block2::RcBlock::as_ptr(&block)) };
 
-                signal_fence.maintain();
-                signal_fence
-                    .pending_command_buffers
-                    .push((signal_value, raw.clone()));
-
-                if let Some(shared_event) = &signal_fence.shared_event {
+                if let Some(shared_event) = signal_fence.shared_event.as_ref() {
                     raw.encodeSignalEvent_value(shared_event.as_ref(), signal_value);
                 }
                 // only return an extra one if it's extra
@@ -1021,11 +1016,6 @@ unsafe impl Sync for QuerySet {}
 #[derive(Debug)]
 pub struct Fence {
     completed_value: Arc<atomic::AtomicU64>,
-    /// The pending fence values have to be ascending.
-    pending_command_buffers: Vec<(
-        crate::FenceValue,
-        Retained<ProtocolObject<dyn MTLCommandBuffer>>,
-    )>,
     shared_event: Option<Retained<ProtocolObject<dyn MTLSharedEvent>>>,
 }
 
@@ -1036,19 +1026,7 @@ unsafe impl Sync for Fence {}
 
 impl Fence {
     fn get_latest(&self) -> crate::FenceValue {
-        let mut max_value = self.completed_value.load(atomic::Ordering::Acquire);
-        for &(value, ref cmd_buf) in self.pending_command_buffers.iter() {
-            if cmd_buf.status() == MTLCommandBufferStatus::Completed {
-                max_value = value;
-            }
-        }
-        max_value
-    }
-
-    fn maintain(&mut self) {
-        let latest = self.get_latest();
-        self.pending_command_buffers
-            .retain(|&(value, _)| value > latest);
+        self.completed_value.load(atomic::Ordering::Acquire)
     }
 
     pub fn raw_shared_event(&self) -> Option<&ProtocolObject<dyn MTLSharedEvent>> {
