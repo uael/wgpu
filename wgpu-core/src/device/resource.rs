@@ -522,7 +522,7 @@ impl Device {
                 user_closures.mappings,
                 queue_empty,
             ) = queue_result;
-            // Queue::drop is acquiring the snatch lock as well 
+            // Queue::drop is acquiring the snatch lock as well
             drop(snatch_guard);
         } else {
             drop(snatch_guard);

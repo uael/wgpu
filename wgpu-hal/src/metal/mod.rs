@@ -424,7 +424,7 @@ impl crate::Queue for Queue {
             let extra_command_buffer = {
                 let completed_value = Arc::clone(&signal_fence.completed_value);
                 let block = block::ConcreteBlock::new(move |_cmd_buf| {
-                    completed_value.store(signal_value, atomic::Ordering::Release);
+                    let _ = completed_value.fetch_max(signal_value, atomic::Ordering::Release);
                 })
                 .copy();
 
@@ -432,18 +432,14 @@ impl crate::Queue for Queue {
                     Some(&cmd_buf) => cmd_buf.raw.to_owned(),
                     None => {
                         let queue = self.raw.lock();
-                        queue
+                        let raw = queue
                             .new_command_buffer_with_unretained_references()
-                            .to_owned()
+                            .to_owned();
+                        raw
                     }
                 };
                 raw.set_label("(wgpu internal) Signal");
                 raw.add_completed_handler(&block);
-
-                signal_fence.maintain();
-                signal_fence
-                    .pending_command_buffers
-                    .push((signal_value, raw.to_owned()));
 
                 if let Some(shared_event) = signal_fence.shared_event.as_ref() {
                     raw.encode_signal_event(shared_event, signal_value);
@@ -893,8 +889,6 @@ unsafe impl Sync for QuerySet {}
 #[derive(Debug)]
 pub struct Fence {
     completed_value: Arc<atomic::AtomicU64>,
-    /// The pending fence values have to be ascending.
-    pending_command_buffers: Vec<(crate::FenceValue, metal::CommandBuffer)>,
     shared_event: Option<metal::SharedEvent>,
 }
 
@@ -905,19 +899,7 @@ unsafe impl Sync for Fence {}
 
 impl Fence {
     fn get_latest(&self) -> crate::FenceValue {
-        let mut max_value = self.completed_value.load(atomic::Ordering::Acquire);
-        for &(value, ref cmd_buf) in self.pending_command_buffers.iter() {
-            if cmd_buf.status() == metal::MTLCommandBufferStatus::Completed {
-                max_value = value;
-            }
-        }
-        max_value
-    }
-
-    fn maintain(&mut self) {
-        let latest = self.get_latest();
-        self.pending_command_buffers
-            .retain(|&(value, _)| value > latest);
+        self.completed_value.load(atomic::Ordering::Acquire)
     }
 
     pub fn raw_shared_event(&self) -> Option<&metal::SharedEvent> {
