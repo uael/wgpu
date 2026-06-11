@@ -134,8 +134,15 @@ impl Instance {
                     .push((A::VARIANT, Box::new(instance)));
             }
             Err(err) => {
-                log::debug!(
-                    "Instance::new: failed to create {:?} backend: {:?}",
+                // A *requested*, compiled-in backend that fails to initialize is the
+                // most common root cause of a later `request_adapter` `NotFound`
+                // (the backend never makes it into `instance_per_backend`, so it shows
+                // up as missing from `active_backends`). Log it loudly with the
+                // underlying error so the reason the backend is unavailable — driver
+                // missing, device lost, init failure, etc. — is visible at default log
+                // levels rather than buried in debug output.
+                log::error!(
+                    "Instance::new: failed to create requested {:?} backend: {:?}",
                     A::VARIANT,
                     err
                 );
@@ -445,6 +452,14 @@ impl Instance {
             let mut backend_adapters =
                 unsafe { instance.enumerate_adapters(compatible_hal_surface) };
             if backend_adapters.is_empty() {
+                // The backend instance initialized fine, but enumerated no adapters at
+                // all. This is the other shape of "backend unavailable" (e.g. the driver
+                // is present but exposes no usable device) and contributes to a later
+                // `NotFound`, so surface it rather than only recording the bit.
+                log::error!(
+                    "Instance::request_adapter: {:?} backend enumerated zero adapters",
+                    backend
+                );
                 no_adapter_backends |= Backends::from(backend);
                 // by continuing, we avoid setting the further error bits below
                 continue;
@@ -534,14 +549,21 @@ impl Instance {
             let adapter = Adapter::new(adapter);
             Ok(adapter)
         } else {
-            Err(wgt::RequestAdapterError::NotFound {
+            let error = wgt::RequestAdapterError::NotFound {
                 supported_backends: self.supported_backends,
                 requested_backends: self.requested_backends,
                 active_backends: self.active_backends(),
                 no_fallback_backends,
                 no_adapter_backends,
                 incompatible_surface_backends,
-            })
+            };
+            // Emit the full breakdown at a visible level so the failure is self-describing
+            // in logs even when the caller does not print the error. If a requested backend
+            // is missing from `active_backends`, its instance failed to initialize — see the
+            // earlier `Instance::new: failed to create requested ... backend` warning for the
+            // underlying cause.
+            log::error!("Instance::request_adapter failed: {:?}", error);
+            Err(error)
         }
     }
 
