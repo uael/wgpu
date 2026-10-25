@@ -549,7 +549,14 @@ impl super::Device {
                 log::trace!("Get binding {name:?} from program {program:?}");
                 match register {
                     super::BindingRegister::UniformBuffers => {
-                        let index = unsafe { gl.get_uniform_block_index(program, name) }.unwrap();
+                        // GL gives no index for a block that is not active, and a driver may drop a
+                        // block that no code of the program reads. Nothing reads such a block, so it
+                        // needs no binding.
+                        let Some(index) = (unsafe { gl.get_uniform_block_index(program, name) })
+                        else {
+                            log::trace!("\tBlock {name:?} is not active, not binding slot {slot}");
+                            continue;
+                        };
                         log::trace!("\tBinding slot {slot} to block index {index}");
                         unsafe { gl.uniform_block_binding(program, index, slot as _) };
                     }
