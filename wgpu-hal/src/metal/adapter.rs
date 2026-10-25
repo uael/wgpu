@@ -704,11 +704,11 @@ impl super::CapabilitiesQuery {
                     // Mesh shaders don't work on virtual devices even if they should be supported. CI thing
                 && !is_virtual;
 
-        let msl_version = if available!(macos = 26.0, ios = 26.0, tvos = 26.0, visionos = 26.0) {
-            MTLLanguageVersion::Version4_0
-        } else if available!(macos = 15.0, ios = 18.0, tvos = 18.0, visionos = 2.0) {
-            MTLLanguageVersion::Version3_2
-        } else if available!(macos = 14.0, ios = 17.0, tvos = 17.0, visionos = 1.0) {
+        // The fork stops at MSL 3.1. The Metal compiler takes about twice as long to build a library
+        // from the same source at 3.2 or 4.0 as at 3.1, and a pipeline builds its library on the
+        // thread that asks for it. Only `MEMORY_DECORATION_COHERENT` (3.2) and per-vertex
+        // varyings (4.0) need a newer version.
+        let msl_version = if available!(macos = 14.0, ios = 17.0, tvos = 17.0, visionos = 1.0) {
             MTLLanguageVersion::Version3_1
         } else if available!(macos = 13.0, ios = 16.0, tvos = 16.0, visionos = 1.0) {
             MTLLanguageVersion::Version3_0
