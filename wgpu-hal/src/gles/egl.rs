@@ -179,9 +179,14 @@ struct EglContext {
 
 impl EglContext {
     fn make_current(&self) {
-        self.instance
-            .make_current(self.display, self.pbuffer, self.pbuffer, Some(self.raw))
-            .unwrap();
+        // EGL refuses a context that another thread holds current. The GL calls that follow then
+        // reach no context and fail, which is better than the end of the process.
+        if let Err(e) =
+            self.instance
+                .make_current(self.display, self.pbuffer, self.pbuffer, Some(self.raw))
+        {
+            log::error!("make_current failed: {e}");
+        }
     }
 
     fn unmake_current(&self) {
@@ -1169,21 +1174,24 @@ impl Surface {
 
         unsafe { gl.bind_framebuffer(glow::READ_FRAMEBUFFER, None) };
 
-        self.egl
+        let swapped = self
+            .egl
             .instance
-            .swap_buffers(self.egl.display, sc.surface)
-            .map_err(|e| {
-                log::error!("swap_buffers failed: {e}");
-                crate::SurfaceError::Lost
-                // TODO: should we unset the current context here?
-            })?;
-        self.egl
+            .swap_buffers(self.egl.display, sc.surface);
+        // A swap that fails, as on a window that Android took away, still releases the context:
+        // otherwise it stays current on this thread, and EGL refuses it to each other thread.
+        let released = self
+            .egl
             .instance
-            .make_current(self.egl.display, None, None, None)
-            .map_err(|e| {
-                log::error!("make_current(null) failed: {e}");
-                crate::SurfaceError::Lost
-            })?;
+            .make_current(self.egl.display, None, None, None);
+        swapped.map_err(|e| {
+            log::error!("swap_buffers failed: {e}");
+            crate::SurfaceError::Lost
+        })?;
+        released.map_err(|e| {
+            log::error!("make_current(null) failed: {e}");
+            crate::SurfaceError::Lost
+        })?;
 
         Ok(())
     }
