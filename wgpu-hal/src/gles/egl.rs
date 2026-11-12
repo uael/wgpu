@@ -1127,6 +1127,11 @@ pub struct Swapchain {
     format_desc: super::TextureFormatDesc,
     #[allow(unused)]
     sample_type: wgt::TextureSampleType,
+    /// Whether a swap waits for no frame of the window, as [`wgt::PresentMode::Immediate`] asks.
+    immediate: bool,
+    /// Whether EGL has yet to hear the swap interval of `immediate`. The interval holds for the
+    /// surface that is current, so the first present after a configuration sets it.
+    interval_pending: AtomicBool,
 }
 
 #[derive(Debug)]
@@ -1167,6 +1172,17 @@ impl Surface {
                 log::error!("make_current(surface) failed: {e}");
                 crate::SurfaceError::Lost
             })?;
+
+        // A swap waits for a free buffer of the window while it holds the context, and an Android
+        // window whose consumer takes no frame, such as a hidden `TextureView`, never frees one:
+        // each other thread then waits for the context. With an interval of 0 the window drops
+        // the frame that waits instead.
+        if sc.interval_pending.swap(false, Ordering::AcqRel) {
+            let interval = if sc.immediate { 0 } else { 1 };
+            if let Err(e) = self.egl.instance.swap_interval(self.egl.display, interval) {
+                log::warn!("eglSwapInterval({interval}) failed: {e}");
+            }
+        }
 
         unsafe { gl.disable(glow::SCISSOR_TEST) };
         unsafe { gl.color_mask(true, true, true, true) };
@@ -1453,6 +1469,8 @@ impl crate::Surface for Surface {
             format: config.format,
             format_desc,
             sample_type: wgt::TextureSampleType::Float { filterable: false },
+            immediate: config.present_mode == wgt::PresentMode::Immediate,
+            interval_pending: AtomicBool::new(true),
         });
 
         Ok(())
