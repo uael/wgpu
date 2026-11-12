@@ -348,8 +348,9 @@ pub struct Device {
 
 impl Drop for Device {
     fn drop(&mut self) {
-        let gl = &self.shared.context.lock();
-        unsafe { gl.delete_vertex_array(self.main_vao) };
+        if let Ok(gl) = &self.shared.context.lock() {
+            unsafe { gl.delete_vertex_array(self.main_vao) };
+        }
     }
 }
 
@@ -378,10 +379,11 @@ pub struct Queue {
 
 impl Drop for Queue {
     fn drop(&mut self) {
-        let gl = &self.shared.context.lock();
-        unsafe { gl.delete_framebuffer(self.draw_fbo) };
-        unsafe { gl.delete_framebuffer(self.copy_fbo) };
-        unsafe { gl.delete_buffer(self.zero_buffer) };
+        if let Ok(gl) = &self.shared.context.lock() {
+            unsafe { gl.delete_framebuffer(self.draw_fbo) };
+            unsafe { gl.delete_framebuffer(self.copy_fbo) };
+            unsafe { gl.delete_buffer(self.zero_buffer) };
+        }
     }
 }
 

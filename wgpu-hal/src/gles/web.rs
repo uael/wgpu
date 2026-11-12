@@ -20,10 +20,10 @@ impl AdapterContext {
     }
 
     /// Obtain a lock to the EGL context and get handle to the [`glow::Context`] that can be used to
-    /// do rendering.
+    /// do rendering. A page has one thread for its context, so this never fails.
     #[track_caller]
-    pub fn lock(&self) -> &glow::Context {
-        &self.glow_context
+    pub fn lock(&self) -> Result<&glow::Context, crate::DeviceError> {
+        Ok(&self.glow_context)
     }
 }
 
@@ -363,7 +363,7 @@ impl crate::Surface for Surface {
             }
         }
 
-        let gl = &device.shared.context.lock();
+        let gl = device.shared.context.lock()?;
 
         {
             let mut swapchain = self.swapchain.write();
@@ -445,7 +445,9 @@ impl crate::Surface for Surface {
     }
 
     unsafe fn unconfigure(&self, device: &super::Device) {
-        let gl = device.shared.context.lock();
+        let Ok(gl) = device.shared.context.lock() else {
+            return;
+        };
         {
             let mut swapchain = self.swapchain.write();
             if let Some(swapchain) = swapchain.take() {

@@ -63,20 +63,21 @@ impl AdapterContext {
 
     /// Obtain a lock to the WGL context and get handle to the [`glow::Context`] that can be used to
     /// do rendering.
+    ///
+    /// Returns [`crate::DeviceError::Lost`] when another thread holds the context for
+    /// [`CONTEXT_LOCK_TIMEOUT_SECS`].
     #[track_caller]
-    pub fn lock(&self) -> AdapterContextLock<'_> {
+    pub fn lock(&self) -> Result<AdapterContextLock<'_>, crate::DeviceError> {
         let inner = self
             .inner
-            // Don't lock forever. If it takes longer than 1 second to get the lock we've got a
-            // deadlock and should panic to show where we got stuck
             .try_lock_for(Duration::from_secs(CONTEXT_LOCK_TIMEOUT_SECS))
-            .expect("Could not lock adapter context. This is most-likely a deadlock.");
+            .ok_or(crate::DeviceError::Lost)?;
 
         if let Some(wgl) = &inner.context {
             wgl.make_current(inner.device.dc).unwrap()
         };
 
-        AdapterContextLock { inner }
+        Ok(AdapterContextLock { inner })
     }
 
     /// Obtain a lock to the WGL context and get handle to the [`glow::Context`] that can be used to
@@ -865,7 +866,9 @@ impl crate::Surface for Surface {
     }
 
     unsafe fn unconfigure(&self, device: &super::Device) {
-        let gl = &device.shared.context.lock();
+        let Ok(gl) = &device.shared.context.lock() else {
+            return;
+        };
         if let Some(sc) = self.swapchain.write().take() {
             unsafe {
                 gl.delete_renderbuffer(sc.renderbuffer);

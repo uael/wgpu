@@ -653,7 +653,7 @@ impl crate::Device for super::Device {
             });
         }
 
-        let gl = &self.shared.context.lock();
+        let gl = &self.shared.context.lock()?;
 
         let target = if desc.usage.contains(wgt::BufferUses::INDEX) {
             glow::ELEMENT_ARRAY_BUFFER
@@ -760,8 +760,9 @@ impl crate::Device for super::Device {
     unsafe fn destroy_buffer(&self, buffer: super::Buffer) {
         if buffer.drop_guard.is_none() {
             if let Some(raw) = buffer.raw {
-                let gl = &self.shared.context.lock();
-                unsafe { gl.delete_buffer(raw) };
+                if let Ok(gl) = &self.shared.context.lock() {
+                    unsafe { gl.delete_buffer(raw) };
+                }
             }
         }
 
@@ -790,7 +791,7 @@ impl crate::Device for super::Device {
                 slice.as_mut_ptr()
             }
             Some(raw) => {
-                let gl = &self.shared.context.lock();
+                let gl = &self.shared.context.lock()?;
                 unsafe { gl.bind_buffer(buffer.target, Some(raw)) };
                 let mut map_state = lock(&buffer.map_state);
                 let ptr = if let Some(map_read_allocation) = map_state.data.as_mut() {
@@ -833,7 +834,9 @@ impl crate::Device for super::Device {
         })
     }
     unsafe fn unmap_buffer(&self, buffer: &super::Buffer) {
-        let gl = &self.shared.context.lock();
+        let Ok(gl) = &self.shared.context.lock() else {
+            return;
+        };
         let mut map_state = lock(&buffer.map_state);
         if core::mem::replace(&mut map_state.mapped, false) {
             if let Some(raw) = buffer.raw {
@@ -850,7 +853,9 @@ impl crate::Device for super::Device {
     where
         I: Iterator<Item = crate::MemoryRange>,
     {
-        let gl = &self.shared.context.lock();
+        let Ok(gl) = &self.shared.context.lock() else {
+            return;
+        };
         let map_state = lock(&buffer.map_state);
         if map_state.mapped {
             if let Some(raw) = buffer.raw {
@@ -878,7 +883,7 @@ impl crate::Device for super::Device {
         &self,
         desc: &crate::TextureDescriptor,
     ) -> Result<super::Texture, crate::DeviceError> {
-        let gl = &self.shared.context.lock();
+        let gl = &self.shared.context.lock()?;
 
         let render_usage = wgt::TextureUses::COLOR_TARGET
             | wgt::TextureUses::DEPTH_STENCIL_WRITE
@@ -1112,19 +1117,20 @@ impl crate::Device for super::Device {
 
     unsafe fn destroy_texture(&self, texture: super::Texture) {
         if texture.drop_guard.is_none() {
-            let gl = &self.shared.context.lock();
-            match texture.inner {
-                super::TextureInner::Renderbuffer { raw, .. } => {
-                    unsafe { gl.delete_renderbuffer(raw) };
+            if let Ok(gl) = &self.shared.context.lock() {
+                match texture.inner {
+                    super::TextureInner::Renderbuffer { raw, .. } => {
+                        unsafe { gl.delete_renderbuffer(raw) };
+                    }
+                    super::TextureInner::DefaultRenderbuffer => {}
+                    super::TextureInner::Texture { raw, .. } => {
+                        unsafe { gl.delete_texture(raw) };
+                    }
+                    #[cfg(webgl)]
+                    super::TextureInner::ExternalFramebuffer { .. } => {}
+                    #[cfg(native)]
+                    super::TextureInner::ExternalNativeFramebuffer { .. } => {}
                 }
-                super::TextureInner::DefaultRenderbuffer => {}
-                super::TextureInner::Texture { raw, .. } => {
-                    unsafe { gl.delete_texture(raw) };
-                }
-                #[cfg(webgl)]
-                super::TextureInner::ExternalFramebuffer { .. } => {}
-                #[cfg(native)]
-                super::TextureInner::ExternalNativeFramebuffer { .. } => {}
             }
         }
 
@@ -1163,7 +1169,7 @@ impl crate::Device for super::Device {
         &self,
         desc: &crate::SamplerDescriptor,
     ) -> Result<super::Sampler, crate::DeviceError> {
-        let gl = &self.shared.context.lock();
+        let gl = &self.shared.context.lock()?;
 
         let raw = unsafe { gl.create_sampler().unwrap() };
 
@@ -1257,8 +1263,9 @@ impl crate::Device for super::Device {
     }
 
     unsafe fn destroy_sampler(&self, sampler: super::Sampler) {
-        let gl = &self.shared.context.lock();
-        unsafe { gl.delete_sampler(sampler.raw) };
+        if let Ok(gl) = &self.shared.context.lock() {
+            unsafe { gl.delete_sampler(sampler.raw) };
+        }
         self.counters.samplers.sub(1);
     }
 
@@ -1526,7 +1533,7 @@ impl crate::Device for super::Device {
             } => (vertex_stage, vertex_buffers),
             crate::VertexProcessor::Mesh { .. } => unreachable!(),
         };
-        let gl = &self.shared.context.lock();
+        let gl = &self.shared.context.lock()?;
         let mut shaders = ArrayVec::new();
         shaders.push((naga::ShaderStage::Vertex, vertex_stage));
         if let Some(ref fs) = desc.fragment_stage {
@@ -1612,7 +1619,9 @@ impl crate::Device for super::Device {
                 Ok(ref p) => p.program != pipeline.inner.program,
                 Err(_) => false,
             });
-            unsafe { gl.delete_program(pipeline.inner.program) };
+            if let Ok(gl) = gl {
+                unsafe { gl.delete_program(pipeline.inner.program) };
+            }
         }
 
         self.counters.render_pipelines.sub(1);
@@ -1626,7 +1635,7 @@ impl crate::Device for super::Device {
             super::PipelineCache,
         >,
     ) -> Result<super::ComputePipeline, crate::PipelineError> {
-        let gl = &self.shared.context.lock();
+        let gl = &self.shared.context.lock()?;
         let mut shaders = ArrayVec::new();
         shaders.push((naga::ShaderStage::Compute, &desc.stage));
         let inner = unsafe { self.create_pipeline(gl, shaders, desc.layout, desc.label, None) }?;
@@ -1648,7 +1657,9 @@ impl crate::Device for super::Device {
                 Ok(ref p) => p.program != pipeline.inner.program,
                 Err(_) => false,
             });
-            unsafe { gl.delete_program(pipeline.inner.program) };
+            if let Ok(gl) = gl {
+                unsafe { gl.delete_program(pipeline.inner.program) };
+            }
         }
 
         self.counters.compute_pipelines.sub(1);
@@ -1692,7 +1703,7 @@ impl crate::Device for super::Device {
         &self,
         desc: &wgt::QuerySetDescriptor<crate::Label>,
     ) -> Result<super::QuerySet, crate::DeviceError> {
-        let gl = &self.shared.context.lock();
+        let gl = &self.shared.context.lock()?;
 
         let mut queries = Vec::with_capacity(desc.count as usize);
         for _ in 0..desc.count {
@@ -1721,9 +1732,10 @@ impl crate::Device for super::Device {
     }
 
     unsafe fn destroy_query_set(&self, set: super::QuerySet) {
-        let gl = &self.shared.context.lock();
-        for &query in set.queries.iter() {
-            unsafe { gl.delete_query(query) };
+        if let Ok(gl) = &self.shared.context.lock() {
+            for &query in set.queries.iter() {
+                unsafe { gl.delete_query(query) };
+            }
         }
         self.counters.query_sets.sub(1);
     }
@@ -1734,8 +1746,9 @@ impl crate::Device for super::Device {
     }
 
     unsafe fn destroy_fence(&self, fence: super::Fence) {
-        let gl = &self.shared.context.lock();
-        fence.destroy(gl);
+        if let Ok(gl) = &self.shared.context.lock() {
+            fence.destroy(gl);
+        }
         self.counters.fences.sub(1);
     }
 
@@ -1743,8 +1756,8 @@ impl crate::Device for super::Device {
         &self,
         fence: &super::Fence,
     ) -> Result<crate::FenceValue, crate::DeviceError> {
-        #[cfg_attr(target_arch = "wasm32", allow(clippy::needless_borrow))]
-        Ok(fence.get_latest(&self.shared.context.lock()))
+        let gl = &self.shared.context.lock()?;
+        Ok(fence.get_latest(gl))
     }
     unsafe fn wait(
         &self,
@@ -1756,7 +1769,7 @@ impl crate::Device for super::Device {
             return Ok(true);
         }
 
-        let gl = &self.shared.context.lock();
+        let gl = &self.shared.context.lock()?;
         // MAX_CLIENT_WAIT_TIMEOUT_WEBGL is:
         // - 1s in Gecko https://searchfox.org/mozilla-central/rev/754074e05178e017ef6c3d8e30428ffa8f1b794d/dom/canvas/WebGLTypes.h#1386
         // - 0 in WebKit https://github.com/WebKit/WebKit/blob/4ef90d4672ca50267c0971b85db403d9684508ea/Source/WebCore/html/canvas/WebGL2RenderingContext.cpp#L110

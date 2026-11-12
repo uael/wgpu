@@ -1,5 +1,11 @@
 use alloc::{string::String, sync::Arc, vec::Vec};
-use core::{ffi, mem::ManuallyDrop, ptr, time::Duration};
+use core::{
+    ffi,
+    mem::ManuallyDrop,
+    ptr,
+    sync::atomic::{AtomicBool, Ordering},
+    time::Duration,
+};
 use std::sync::LazyLock;
 
 use glow::HasContext;
@@ -190,9 +196,9 @@ impl EglContext {
     }
 
     fn unmake_current(&self) {
-        self.instance
-            .make_current(self.display, None, None, None)
-            .unwrap();
+        if let Err(e) = self.instance.make_current(self.display, None, None, None) {
+            log::error!("make_current(null) failed: {e}");
+        }
     }
 }
 
@@ -202,6 +208,10 @@ impl EglContext {
 pub struct AdapterContext {
     glow: Mutex<ManuallyDrop<glow::Context>>,
     egl: Option<EglContext>,
+    /// Whether a thread once waited [`CONTEXT_LOCK_TIMEOUT_SECS`] for the context in vain. A call
+    /// that gave up skipped its GL work, so the device is lost from then on, even once the context
+    /// is free again.
+    lost: AtomicBool,
 }
 
 unsafe impl Sync for AdapterContext {}
@@ -308,24 +318,21 @@ impl AdapterContext {
     ///
     /// > **Note:** Calling this function **will** still lock the [`glow::Context`] which adds an
     /// > extra safe-guard against accidental concurrent access to the context.
-    pub unsafe fn get_without_egl_lock(&self) -> MappedMutexGuard<'_, glow::Context> {
-        let guard = self
-            .glow
-            .try_lock_for(Duration::from_secs(CONTEXT_LOCK_TIMEOUT_SECS))
-            .expect("Could not lock adapter context. This is most-likely a deadlock.");
-        MutexGuard::map(guard, |glow| &mut **glow)
+    pub unsafe fn get_without_egl_lock(
+        &self,
+    ) -> Result<MappedMutexGuard<'_, glow::Context>, crate::DeviceError> {
+        let guard = self.glow_guard()?;
+        Ok(MutexGuard::map(guard, |glow| &mut **glow))
     }
 
     /// Obtain a lock to the EGL context and get handle to the [`glow::Context`] that can be used to
     /// do rendering.
+    ///
+    /// Returns [`crate::DeviceError::Lost`] when another thread holds the context for
+    /// [`CONTEXT_LOCK_TIMEOUT_SECS`], and at each call after that.
     #[track_caller]
-    pub fn lock<'a>(&'a self) -> AdapterContextLock<'a> {
-        let glow = self
-            .glow
-            // Don't lock forever. If it takes longer than 1 second to get the lock we've got a
-            // deadlock and should panic to show where we got stuck
-            .try_lock_for(Duration::from_secs(CONTEXT_LOCK_TIMEOUT_SECS))
-            .expect("Could not lock adapter context. This is most-likely a deadlock.");
+    pub fn lock<'a>(&'a self) -> Result<AdapterContextLock<'a>, crate::DeviceError> {
+        let glow = self.glow_guard()?;
 
         let egl = self.egl.as_ref().map(|egl| {
             egl.make_current();
@@ -335,7 +342,28 @@ impl AdapterContext {
             }
         });
 
-        AdapterContextLock { glow, egl }
+        Ok(AdapterContextLock { glow, egl })
+    }
+
+    /// The lock of the [`glow::Context`]. A thread that holds the context for
+    /// [`CONTEXT_LOCK_TIMEOUT_SECS`], such as one whose `eglSwapBuffers` waits for a window that
+    /// takes no frame, loses the device instead of ending the process.
+    fn glow_guard(
+        &self,
+    ) -> Result<MutexGuard<'_, ManuallyDrop<glow::Context>>, crate::DeviceError> {
+        if self.lost.load(Ordering::Acquire) {
+            return Err(crate::DeviceError::Lost);
+        }
+        self.glow
+            .try_lock_for(Duration::from_secs(CONTEXT_LOCK_TIMEOUT_SECS))
+            .ok_or_else(|| {
+                if !self.lost.swap(true, Ordering::AcqRel) {
+                    log::error!(
+                        "The GL context stayed locked for {CONTEXT_LOCK_TIMEOUT_SECS} s: the device is lost"
+                    );
+                }
+                crate::DeviceError::Lost
+            })
     }
 }
 
@@ -1038,6 +1066,7 @@ impl crate::Instance for Instance {
                     glow: Mutex::new(gl),
                     // ERROR: Copying owned reference handles here, be careful to not drop them!
                     egl: Some(inner.egl.clone()),
+                    lost: AtomicBool::new(false),
                 },
                 self.options.clone(),
             )
@@ -1067,6 +1096,7 @@ impl super::Adapter {
                 AdapterContext {
                     glow: Mutex::new(ManuallyDrop::new(context)),
                     egl: None,
+                    lost: AtomicBool::new(false),
                 },
                 options,
             )
@@ -1119,7 +1149,7 @@ impl Surface {
         _suf_texture: super::Texture,
         context: &AdapterContext,
     ) -> Result<(), crate::SurfaceError> {
-        let gl = unsafe { context.get_without_egl_lock() };
+        let gl = unsafe { context.get_without_egl_lock() }?;
         let swapchain = self.swapchain.read();
         let sc = swapchain.as_ref().ok_or(crate::SurfaceError::Other(
             "Surface has no swap-chain configured",
@@ -1203,15 +1233,14 @@ impl Surface {
         khronos_egl::Surface,
         Option<*mut wayland_sys::egl::wl_egl_window>,
     )> {
-        let gl = &device.shared.context.lock();
-        match self.swapchain.write().take() {
-            Some(sc) => {
-                unsafe { gl.delete_renderbuffer(sc.renderbuffer) };
-                unsafe { gl.delete_framebuffer(sc.framebuffer) };
-                Some((sc.surface, sc.wl_window))
-            }
-            None => None,
+        // A lost device keeps its GL objects, but the window surface goes in any case.
+        let gl = device.shared.context.lock();
+        let sc = self.swapchain.write().take()?;
+        if let Ok(gl) = gl {
+            unsafe { gl.delete_renderbuffer(sc.renderbuffer) };
+            unsafe { gl.delete_framebuffer(sc.framebuffer) };
         }
+        Some((sc.surface, sc.wl_window))
     }
 
     pub fn supports_srgb(&self) -> bool {
@@ -1384,7 +1413,7 @@ impl crate::Surface for Surface {
         };
 
         let format_desc = device.shared.describe_texture_format(config.format);
-        let gl = &device.shared.context.lock();
+        let gl = &device.shared.context.lock()?;
         let renderbuffer = unsafe { gl.create_renderbuffer() }.map_err(|error| {
             log::error!("Internal swapchain renderbuffer creation failed: {error}");
             crate::DeviceError::OutOfMemory

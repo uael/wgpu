@@ -1907,7 +1907,7 @@ impl crate::Queue for super::Queue {
         (signal_fence, signal_value): (&super::Fence, crate::FenceValue),
     ) -> Result<(), crate::DeviceError> {
         let shared = Arc::clone(&self.shared);
-        let gl = &shared.context.lock();
+        let gl = &shared.context.lock()?;
         for cmd_buf in command_buffers.iter() {
             // The command encoder assumes a default state when encoding the command buffer.
             // Always reset the state between command_buffers to reflect this assumption. Do
@@ -1968,7 +1968,7 @@ impl crate::Queue for super::Queue {
     }
 
     unsafe fn wait_for_idle(&self) -> Result<(), crate::DeviceError> {
-        let gl = &self.shared.context.lock();
+        let gl = &self.shared.context.lock()?;
         unsafe { gl.finish() };
         Ok(())
     }

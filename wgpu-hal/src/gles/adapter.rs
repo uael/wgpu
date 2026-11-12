@@ -197,7 +197,7 @@ impl super::Adapter {
         context: super::AdapterContext,
         backend_options: wgt::GlBackendOptions,
     ) -> Option<crate::ExposedAdapter<super::Api>> {
-        let gl = context.lock();
+        let gl = context.lock().ok()?;
         let extensions = gl.supported_extensions();
 
         let (vendor_const, renderer_const) = if extensions.contains("WEBGL_debug_renderer_info") {
@@ -1082,7 +1082,7 @@ impl crate::Adapter for super::Adapter {
         _limits: &wgt::Limits,
         _memory_hints: &wgt::MemoryHints,
     ) -> Result<crate::OpenDevice<super::Api>, crate::DeviceError> {
-        let gl = &self.shared.context.lock();
+        let gl = &self.shared.context.lock()?;
         unsafe { gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 1) };
         unsafe { gl.pixel_store_i32(glow::PACK_ALIGNMENT, 1) };
         let main_vao =
