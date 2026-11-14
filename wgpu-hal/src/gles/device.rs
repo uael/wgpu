@@ -683,11 +683,13 @@ impl crate::Device for super::Device {
             .try_into()
             .map_err(|_| crate::DeviceError::OutOfMemory)?;
 
-        if self
-            .shared
-            .private_caps
-            .contains(PrivateCapabilities::BUFFER_ALLOCATION)
-        {
+        if allocates_storage(
+            self.shared
+                .private_caps
+                .contains(PrivateCapabilities::BUFFER_ALLOCATION),
+            desc.usage,
+            is_coherent,
+        ) {
             if is_host_visible {
                 map_flags |= glow::MAP_PERSISTENT_BIT;
                 if is_coherent {
@@ -1834,6 +1836,43 @@ impl crate::Device for super::Device {
 
     fn check_if_oom(&self) -> Result<(), crate::DeviceError> {
         Ok(())
+    }
+}
+
+/// Whether a buffer of `usage` takes immutable storage (`glBufferStorage`, mapped persistently)
+/// rather than `glBufferData`, when the context has `buffer_storage`.
+///
+/// A buffer that the CPU only reads takes `glBufferData` with `STREAM_READ`: a driver can map
+/// immutable storage uncached, and each read of it then goes to memory. On a Mali-G715, a loop of
+/// 8-byte loads reads such a mapping at 250 to 600 MB/s, and a `STREAM_READ` mapping at 5 to
+/// 11 GB/s, after a map of 4 ms for 44 MB. A coherent mapping needs the storage.
+fn allocates_storage(buffer_allocation: bool, usage: wgt::BufferUses, is_coherent: bool) -> bool {
+    let read_back =
+        usage.contains(wgt::BufferUses::MAP_READ) && !usage.contains(wgt::BufferUses::MAP_WRITE);
+    buffer_allocation && (is_coherent || !read_back)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::allocates_storage;
+    use wgt::BufferUses;
+
+    #[test]
+    fn a_read_back_buffer_takes_buffer_data() {
+        let read_back = BufferUses::MAP_READ | BufferUses::COPY_DST;
+        assert!(!allocates_storage(true, read_back, false));
+        assert!(allocates_storage(true, read_back, true));
+        assert!(allocates_storage(
+            true,
+            BufferUses::MAP_WRITE | BufferUses::COPY_SRC,
+            false
+        ));
+        assert!(allocates_storage(
+            true,
+            BufferUses::VERTEX | BufferUses::COPY_DST,
+            false
+        ));
+        assert!(!allocates_storage(false, BufferUses::VERTEX, false));
     }
 }
 
