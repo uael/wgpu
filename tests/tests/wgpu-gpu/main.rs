@@ -71,6 +71,8 @@ mod shader_barycentric;
 mod shader_primitive_index;
 mod shader_view_format;
 mod subgroup_operations;
+#[cfg(target_vendor = "apple")]
+mod surface_configure;
 mod texture_binding;
 mod texture_blit;
 mod texture_bounds;
@@ -159,6 +161,8 @@ fn all_tests() -> Vec<wgpu_test::GpuTestInitializer> {
     shader_view_format::all_tests(&mut tests);
     shader::all_tests(&mut tests);
     subgroup_operations::all_tests(&mut tests);
+    #[cfg(target_vendor = "apple")]
+    surface_configure::all_tests(&mut tests);
     texture_binding::all_tests(&mut tests);
     texture_blit::all_tests(&mut tests);
     texture_bounds::all_tests(&mut tests);

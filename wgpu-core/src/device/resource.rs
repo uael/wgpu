@@ -5266,9 +5266,11 @@ impl Device {
 
         log::debug!("configuring surface with {config:?}");
 
+        // User callbacks must not be called while we are holding locks. The wait for the GPU below
+        // completes the map callbacks of the work it waited for, so they fire also when the
+        // configuration fails after the wait.
+        let mut user_callbacks = UserClosures::default();
         let error = 'error: {
-            // User callbacks must not be called while we are holding locks.
-            let user_callbacks;
             {
                 if let Err(e) = self.check_is_valid() {
                     break 'error e.into();
@@ -5411,6 +5413,7 @@ impl Device {
             return None;
         };
 
+        user_callbacks.fire();
         Some(error)
     }
 

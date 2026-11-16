@@ -85,6 +85,11 @@ parking_lot.workspace = true
 strum = { workspace = true, features = ["derive"] }
 trybuild.workspace = true
 
+[target.'cfg(target_vendor = "apple")'.dev-dependencies]
+objc2.workspace = true
+objc2-core-foundation.workspace = true
+objc2-quartz-core.workspace = true
+
 # Non-Webassembly
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # Cargo-metadata doesn't compile on wasm due to old cargo-util-schemas dependency.
