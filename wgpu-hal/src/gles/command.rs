@@ -527,6 +527,9 @@ impl crate::CommandEncoder for super::CommandEncoder {
                 super::TextureInner::ExternalFramebuffer { .. } => true,
                 #[cfg(native)]
                 super::TextureInner::ExternalNativeFramebuffer { .. } => true,
+                // The default framebuffer draws into its one colour buffer, `BACK`: GL refuses
+                // `COLOR_ATTACHMENT0` there (WebGL warns "drawBuffers: BACK or NONE" at each pass).
+                super::TextureInner::DefaultRenderbuffer => true,
                 _ => false,
             });
 
